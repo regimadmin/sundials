@@ -427,6 +427,7 @@ struct ARKodeMemRec
   sunbooleantype step_supports_adaptive;
   ARKSetAdaptControllerFn step_setadaptcontroller;
   ARKTimestepGetEstLocalErrors step_getestlocalerrors;
+  ARKTimestepGetEstLocalErrors step_getestlocalerrors2;
 
   /* Time stepper module -- relaxation */
   sunbooleantype step_supports_relaxation;
