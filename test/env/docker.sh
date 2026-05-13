@@ -286,7 +286,7 @@ else
     SUPERLU_DIST_BLAS_ROOT=/opt/view
     if [ "$SUNDIALS_INDEX_SIZE" == "64" ]; then
         if [ -f "${SUPERLU_DIST_BLAS_ROOT}/lib/libblas.so" ]; then
-            SUPERLU_DIST_BLAS_LIBRARIES="${SUPERLU_DIST_BLAS_ROOT}/lib/libblas.so;${SUPERLU_BLAS_BLAS_ROOT}/lib/liblapack.so"
+            SUPERLU_DIST_BLAS_LIBRARIES="${SUPERLU_DIST_BLAS_ROOT}/lib/libblas.so;${SUPERLU_DIST_BLAS_ROOT}/lib/liblapack.so"
         fi
     else
         SUPERLU_DIST_BLAS_LIBRARIES="${SUPERLU_DIST_BLAS_ROOT}/lib/libopenblas.so"
@@ -304,7 +304,7 @@ else
     export SUPERLU_DIST_OPENMP=OFF
 
     # if BLAS wasn't found, then dont build SuperLU_DIST
-    if [ -z "$BLAS_LIBRARIES" ]; then
+    if [ -z "$SUPERLU_DIST_BLAS_LIBRARIES" ]; then
         export SUNDIALS_SUPERLU_DIST=OFF
     else
         export SUNDIALS_SUPERLU_DIST=ON
