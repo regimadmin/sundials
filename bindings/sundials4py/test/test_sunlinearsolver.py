@@ -16,7 +16,7 @@
 # -----------------------------------------------------------------
 
 import pytest
-import sys
+import importlib
 from fixtures import *
 from sundials4py.core import *
 
@@ -54,7 +54,7 @@ def test_create_sptfqmr(sunctx, nvec):
 
 
 def test_create_superlumt(sunctx, nvec):
-    if not hasattr(sys.modules["sundials4py.core"], "SUNLinSol_SuperLUMT"):
+    if not hasattr(importlib.import_module("sundials4py.core"), "SUNLinSol_SuperLUMT"):
         pytest.skip("SUNLinSol_SuperLUMT is not enabled in this build")
 
     A = SUNSparseMatrix(N_VGetLength(nvec), N_VGetLength(nvec), 1, CSC_MAT, sunctx)
