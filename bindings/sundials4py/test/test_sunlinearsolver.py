@@ -52,6 +52,15 @@ def test_create_sptfqmr(sunctx, nvec):
     assert LS is not None
 
 
+def test_create_superlumt_if_available(sunctx, nvec):
+    if "SUNLinSol_SuperLUMT" not in globals():
+        pytest.skip("SUNLinSol_SuperLUMT is not enabled in this build")
+
+    A = SUNSparseMatrix(N_VGetLength(nvec), N_VGetLength(nvec), 1, CSC_MAT, sunctx)
+    LS = SUNLinSol_SuperLUMT(nvec, A, 1, sunctx)
+    assert LS is not None
+
+
 def test_get_type_and_id(sunctx, nvec):
     A = SUNDenseMatrix(N_VGetLength(nvec), N_VGetLength(nvec), sunctx)
     LS = SUNLinSol_Dense(nvec, A, sunctx)

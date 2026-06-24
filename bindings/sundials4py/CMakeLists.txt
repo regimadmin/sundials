@@ -115,6 +115,10 @@ set(sundials_SOURCES
     sunnonlinsol/sunnonlinsol_newton.cpp
     test/sundials4py_test.cpp)
 
+if(SUNDIALS_ENABLE_SUPERLUMT)
+  list(APPEND sundials_SOURCES sunlinsol/sunlinsol_superlumt.cpp)
+endif()
+
 # Create the Python sundials library
 nanobind_add_module(sundials4py STABLE_ABI NB_STATIC ${sundials_SOURCES})
 
@@ -145,6 +149,10 @@ target_link_libraries(
           sundials_sunmatrixsparse
           sundials_sundomeigestpower
           sundials_core)
+
+if(SUNDIALS_ENABLE_SUPERLUMT)
+  target_link_libraries(sundials4py PRIVATE sundials_sunlinsolsuperlumt)
+endif()
 
 # Install directive for scikit-build-core
 install(TARGETS sundials4py LIBRARY DESTINATION .)
