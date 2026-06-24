@@ -53,7 +53,7 @@ def test_create_sptfqmr(sunctx, nvec):
     assert LS is not None
 
 
-def test_create_superlumt_if_available(sunctx, nvec):
+def test_create_superlumt(sunctx, nvec):
     if not hasattr(s4py_core, "SUNLinSol_SuperLUMT"):
         pytest.skip("SUNLinSol_SuperLUMT is not enabled in this build")
 
