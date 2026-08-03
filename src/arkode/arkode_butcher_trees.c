@@ -405,7 +405,7 @@ int arkodeButcherTrees_Weight(const int* levels, const int* colors, int order,
     return (-1);
   }
 
-  prod   = work;
+  prod = work;
   retval = treeWeightChildren(levels, colors, order, 0, A, c, s, prod, work + s);
   if (retval) { return (retval); }
 

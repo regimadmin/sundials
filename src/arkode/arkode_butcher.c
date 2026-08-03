@@ -50,14 +50,14 @@ static int arkode_butcher_dot(sunrealtype* x, sunrealtype* y, int s,
 static sunbooleantype arkode_butcher_rowsum(sunrealtype** A, sunrealtype* c,
                                             int s);
 static int arkode_butcher_check_conditions(sunrealtype* b, sunrealtype** A,
-                                            sunrealtype* c, int s, int order,
-                                            sunrealtype* work, const char* name,
-                                            FILE* outfile);
+                                           sunrealtype* c, int s, int order,
+                                           sunrealtype* work, const char* name,
+                                           FILE* outfile);
 static int arkode_butcher_check_ark_conditions(sunrealtype* const* b,
-                                                sunrealtype** const* A,
-                                                sunrealtype* const* c, int s,
-                                                int order, sunrealtype* work,
-                                                const char* name, FILE* outfile);
+                                               sunrealtype** const* A,
+                                               sunrealtype* const* c, int s,
+                                               int order, sunrealtype* work,
+                                               const char* name, FILE* outfile);
 static int __ButcherSimplifyingAssumptions(sunrealtype** A, sunrealtype* b,
                                            sunrealtype* c, int s);
 
@@ -681,7 +681,6 @@ int ARKodeButcherTable_CheckARKOrder(ARKodeButcherTable B1, ARKodeButcherTable B
   return (0);
 }
 
-
 /*---------------------------------------------------------------
   Private utility routines for checking method order
   ---------------------------------------------------------------*/
@@ -746,9 +745,9 @@ static sunbooleantype arkode_butcher_rowsum(sunrealtype** A, sunrealtype* c, int
   -1 on an internal error.
   ---------------------------------------------------------------*/
 static int arkode_butcher_check_conditions(sunrealtype* b, sunrealtype** A,
-                                            sunrealtype* c, int s, int order,
-                                            sunrealtype* work, const char* name,
-                                            FILE* outfile)
+                                           sunrealtype* c, int s, int order,
+                                           sunrealtype* work, const char* name,
+                                           FILE* outfile)
 {
   ARKodeButcherTreeIter iter;
   long int gamma;
@@ -810,10 +809,10 @@ static int arkode_butcher_check_conditions(sunrealtype* b, sunrealtype** A,
   -1 on an internal error.
   ---------------------------------------------------------------*/
 static int arkode_butcher_check_ark_conditions(sunrealtype* const* b,
-                                                sunrealtype** const* A,
-                                                sunrealtype* const* c, int s,
-                                                int order, sunrealtype* work,
-                                                const char* name, FILE* outfile)
+                                               sunrealtype** const* A,
+                                               sunrealtype* const* c, int s,
+                                               int order, sunrealtype* work,
+                                               const char* name, FILE* outfile)
 {
   ARKodeButcherTreeIter iter;
   long int gamma, mask, ncolorings;
@@ -870,7 +869,6 @@ static int arkode_butcher_check_ark_conditions(sunrealtype* const* b,
   arkodeButcherTrees_IterFree(&iter);
   return (alltrue ? 1 : 0);
 }
-
 
 /*---------------------------------------------------------------
   Utility routine to check Butcher's simplifying assumptions.

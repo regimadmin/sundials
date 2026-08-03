@@ -363,7 +363,7 @@ ARKodeButcherTable functions
       elementary-weight expression of its rooted tree, e.g., ``method fails
       order 6 condition b'*((A*(c.*c)).*(A*c)) = 1/36``.
 
-   .. versionchanged:: 7.9.0
+   .. versionchanged:: x.y.z
 
       The order conditions are now generated from rooted trees, raising the
       maximum analytically-checked order from 6 to 9 for double and extended
@@ -400,7 +400,7 @@ ARKodeButcherTable functions
       For embedded methods, if the return flags for *q* and *p* would
       differ, warning takes precedence over success.
 
-   .. versionchanged:: 7.9.0
+   .. versionchanged:: x.y.z
 
       The order conditions are now generated from 2-colored rooted trees.
       Fixed a bug where the embedding coefficients of *B1* were used in place

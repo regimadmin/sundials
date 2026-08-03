@@ -63,8 +63,8 @@ static int check_conditions(ARKodeButcherTable B, int order, sunrealtype tol)
   {
     long int gamma  = arkodeButcherTrees_Density(iter.levels, order);
     sunrealtype phi = SUN_RCONST(0.0);
-    if ((gamma < 1) || arkodeButcherTrees_Weight(iter.levels, NULL, order, b,
-                                                 A, c, B->stages, work, &phi))
+    if ((gamma < 1) || arkodeButcherTrees_Weight(iter.levels, NULL, order, b, A,
+                                                 c, B->stages, work, &phi))
     {
       arkodeButcherTrees_IterFree(&iter);
       delete[] work;
@@ -157,10 +157,8 @@ int main()
     while (more)
     {
       char diff[128], weight[128];
-      if (arkodeButcherTrees_ElementaryDiff(iter.levels, n, diff,
-                                            sizeof(diff)) ||
-          arkodeButcherTrees_WeightString(iter.levels, n, weight,
-                                          sizeof(weight)))
+      if (arkodeButcherTrees_ElementaryDiff(iter.levels, n, diff, sizeof(diff)) ||
+          arkodeButcherTrees_WeightString(iter.levels, n, weight, sizeof(weight)))
       {
         numfails++;
       }
@@ -204,18 +202,18 @@ int main()
   // Test 5: elementary weights certify classical RK4 exactly through
   // order 4 and reject it at order 5
   {
-    ARKodeButcherTable B = ARKodeButcherTable_Alloc(4, SUNFALSE);
-    B->q                 = 4;
-    B->A[1][0]           = SUN_RCONST(0.5);
-    B->A[2][1]           = SUN_RCONST(0.5);
-    B->A[3][2]           = SUN_RCONST(1.0);
-    B->b[0]              = SUN_RCONST(1.0) / SUN_RCONST(6.0);
-    B->b[1]              = SUN_RCONST(1.0) / SUN_RCONST(3.0);
-    B->b[2]              = SUN_RCONST(1.0) / SUN_RCONST(3.0);
-    B->b[3]              = SUN_RCONST(1.0) / SUN_RCONST(6.0);
-    B->c[1]              = SUN_RCONST(0.5);
-    B->c[2]              = SUN_RCONST(0.5);
-    B->c[3]              = SUN_RCONST(1.0);
+    ARKodeButcherTable B  = ARKodeButcherTable_Alloc(4, SUNFALSE);
+    B->q                  = 4;
+    B->A[1][0]            = SUN_RCONST(0.5);
+    B->A[2][1]            = SUN_RCONST(0.5);
+    B->A[3][2]            = SUN_RCONST(1.0);
+    B->b[0]               = SUN_RCONST(1.0) / SUN_RCONST(6.0);
+    B->b[1]               = SUN_RCONST(1.0) / SUN_RCONST(3.0);
+    B->b[2]               = SUN_RCONST(1.0) / SUN_RCONST(3.0);
+    B->b[3]               = SUN_RCONST(1.0) / SUN_RCONST(6.0);
+    B->c[1]               = SUN_RCONST(0.5);
+    B->c[2]               = SUN_RCONST(0.5);
+    B->c[3]               = SUN_RCONST(1.0);
     const sunrealtype tol = SUNRsqrt(SUN_UNIT_ROUNDOFF);
     bool pass             = true;
     for (int n = 1; n <= 4; n++)
@@ -227,8 +225,7 @@ int main()
     if (!pass) { numfails++; }
     const int nfail5 = check_conditions(B, 5, tol);
     printf("Classical RK4 fails %s order-5 condition: %s\n",
-           (nfail5 > 0) ? "at least one" : "no",
-           (nfail5 > 0) ? "PASS" : "FAIL");
+           (nfail5 > 0) ? "at least one" : "no", (nfail5 > 0) ? "PASS" : "FAIL");
     if (nfail5 <= 0) { numfails++; }
     ARKodeButcherTable_Free(B);
   }
@@ -266,8 +263,7 @@ int main()
     if (!pass) { numfails++; }
     const int nfail7 = check_conditions(B, 7, tol);
     printf("Gauss-Legendre (3 stage) fails %s order-7 condition: %s\n",
-           (nfail7 > 0) ? "at least one" : "no",
-           (nfail7 > 0) ? "PASS" : "FAIL");
+           (nfail7 > 0) ? "at least one" : "no", (nfail7 > 0) ? "PASS" : "FAIL");
     if (nfail7 <= 0) { numfails++; }
     ARKodeButcherTable_Free(B);
   }
