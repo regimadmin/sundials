@@ -327,9 +327,12 @@ ARKodeButcherTable functions
 .. c:function:: int ARKodeButcherTable_CheckOrder(ARKodeButcherTable B, int* q, int* p, FILE* outfile)
 
    Determine the analytic order of accuracy for the specified Butcher
-   table. The analytic (necessary) conditions are checked up to order 6. For
-   orders greater than 6 the Butcher simplifying (sufficient) assumptions are
-   used.
+   table. The analytic (necessary) order conditions, :math:`\Phi(t) =
+   1/\gamma(t)`, are generated from the rooted trees associated with the
+   elementary differentials of the ODE right-hand side and are checked up to
+   order 9 when using double or extended precision (order 6 when using single
+   precision). For orders greater than these the Butcher simplifying
+   (sufficient) assumptions are used.
 
    **Arguments:**
       * *B* -- the Butcher table.
@@ -356,11 +359,23 @@ ARKodeButcherTable functions
       differ, failure takes precedence over warning, which takes precedence over
       success.
 
+      When *outfile* is supplied, any failed condition is reported using the
+      elementary-weight expression of its rooted tree, e.g., ``method fails
+      order 6 condition b'*((A*(c.*c)).*(A*c)) = 1/36``.
+
+   .. versionchanged:: 7.9.0
+
+      The order conditions are now generated from rooted trees, raising the
+      maximum analytically-checked order from 6 to 9 for double and extended
+      precision. A missing order-6 condition was added.
+
 
 .. c:function:: int ARKodeButcherTable_CheckARKOrder(ARKodeButcherTable B1, ARKodeButcherTable B2, int *q, int *p, FILE *outfile)
 
    Determine the analytic order of accuracy (up to order 6) for a specified
-   ARK pair of Butcher tables.
+   ARK pair of Butcher tables. The analytic order conditions are generated
+   from the 2-colored rooted trees associated with the elementary
+   differentials of the additively-partitioned ODE right-hand side.
 
    **Arguments:**
       * *B1* -- a Butcher table in the ARK pair.
@@ -384,3 +399,9 @@ ARKodeButcherTable functions
    **Notes:**
       For embedded methods, if the return flags for *q* and *p* would
       differ, warning takes precedence over success.
+
+   .. versionchanged:: 7.9.0
+
+      The order conditions are now generated from 2-colored rooted trees.
+      Fixed a bug where the embedding coefficients of *B1* were used in place
+      of those of *B2* when checking the embedding order of the pair.
