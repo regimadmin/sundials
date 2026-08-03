@@ -432,6 +432,38 @@ classes of methods, ARKODE provides tables with orders of accuracy
 :numref:`Butcher.implicit`. Again, user-defined DIRK tables are supported.
 
 
+.. _ARKODE.Mathematics.OrderConditions:
+
+Rooted trees and Runge--Kutta order conditions
+----------------------------------------------
+
+The order of accuracy of a Runge--Kutta method is characterized through the
+*elementary differentials* of the autonomous ODE right-hand side,
+:math:`f,\; f'f,\; f''(f,f),\; f'f'f,\ldots`, that arise in the Taylor
+expansion of the solution.  These are in one-to-one correspondence with
+unlabeled rooted trees :math:`t` :cite:p:`Butcher:08,HWN:87`, whose count per
+order :math:`1, 1, 2, 4, 9, 20, 48, 115, 286, 719, \ldots` is given by the
+integer sequence `OEIS A000081 <https://oeis.org/A000081>`_.  Each tree
+:math:`t` with :math:`r(t)` nodes yields one algebraic condition on the
+Butcher table coefficients that a method must satisfy to attain order
+:math:`r(t)`,
+
+.. math::
+   \Phi(t) = \frac{1}{\gamma(t)},
+
+where the *elementary weight* :math:`\Phi(t)` contracts the coefficients
+:math:`(A, b, c)` according to the tree structure and :math:`\gamma(t)` is
+the tree *density*.  For example, the four trees with up to three nodes give
+the conditions :math:`\sum_i b_i = 1`, :math:`\sum_i b_i c_i = \frac12`,
+:math:`\sum_{i,j} b_i A_{ij} c_j = \frac16`, and
+:math:`\sum_i b_i c_i^2 = \frac13`.  The routines
+:c:func:`ARKodeButcherTable_CheckOrder` and
+:c:func:`ARKodeButcherTable_CheckARKOrder` generate these conditions
+programmatically by enumerating rooted trees (2-colored rooted trees in the
+ARK case, where each node is assigned to either the explicit or the implicit
+table) to verify the order of a given method and embedding.
+
+
 .. _ARKODE.Mathematics.ERK:
 
 ERKStep -- Explicit Runge--Kutta methods
