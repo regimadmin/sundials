@@ -1,5 +1,6 @@
 /*---------------------------------------------------------------
  * Programmer(s): Daniel R. Reynolds @ UMBC
+                  Steven B. Roberts @ LLNL
  *---------------------------------------------------------------
  * SUNDIALS Copyright Start
  * Copyright (c) 2025-2026, Lawrence Livermore National Security,
@@ -20,46 +21,13 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sundials/sundials_math.h>
 
-#include "arkode_butcher_trees_impl.h"
 #include "arkode_impl.h"
+#include "sundials_utils.h"
 
-/* tolerance for checking order conditions */
-#define TOL (SUNRsqrt(SUN_UNIT_ROUNDOFF))
-
-/* Maximum order for which analytical order conditions (one per
-   rooted tree, cf. arkode_butcher_trees_impl.h) are checked; above
-   this we revert to the Butcher simplifying assumptions.  The
-   condition right-hand sides 1/gamma(t) decay like 1/order!, so the
-   achievable order depends on the working precision. */
-#if defined(SUNDIALS_SINGLE_PRECISION)
-#define ARK_BUTCHER_MAX_CHECK_ORDER 6
-#else
-#define ARK_BUTCHER_MAX_CHECK_ORDER 9
-#endif
-
-/* Maximum order for which the analytical order conditions of an ARK
-   pair (one per 2-colored rooted tree) are checked */
-#define ARK_BUTCHER_MAX_ARK_CHECK_ORDER 6
-
-/* Private utility functions for checking method order */
-static int arkode_butcher_vp(sunrealtype* x, int l, int s, sunrealtype* z);
-static int arkode_butcher_dot(sunrealtype* x, sunrealtype* y, int s,
-                              sunrealtype* d);
-static sunbooleantype arkode_butcher_rowsum(sunrealtype** A, sunrealtype* c,
-                                            int s);
-static int arkode_butcher_check_conditions(sunrealtype* b, sunrealtype** A,
-                                           sunrealtype* c, int s, int order,
-                                           sunrealtype* work, const char* name,
-                                           FILE* outfile);
-static int arkode_butcher_check_ark_conditions(sunrealtype* const* b,
-                                               sunrealtype** const* A,
-                                               sunrealtype* const* c, int s,
-                                               int order, sunrealtype* work,
-                                               const char* name, FILE* outfile);
-static int __ButcherSimplifyingAssumptions(sunrealtype** A, sunrealtype* b,
-                                           sunrealtype* c, int s);
+#define MAX_ORDER 10
 
 /*---------------------------------------------------------------
   Routine to allocate an empty Butcher table structure
@@ -271,6 +239,22 @@ void ARKodeButcherTable_Free(ARKodeButcherTable B)
   }
 }
 
+static sunbooleantype is_valid_table(ARKodeButcherTable table)
+{
+  if (table == NULL || table->stages < 1 || table->A == NULL ||
+      table->b == NULL || table->c == NULL)
+  {
+    return SUNFALSE;
+  }
+
+  for (int i = 0; i < table->stages; i++)
+  {
+    if (table->A[i] == NULL) { return SUNFALSE; }
+  }
+
+  return SUNTRUE;
+}
+
 /*---------------------------------------------------------------
   Routine to print a Butcher table structure
   ---------------------------------------------------------------*/
@@ -278,15 +262,7 @@ void ARKodeButcherTable_Write(ARKodeButcherTable B, FILE* outfile)
 {
   int i, j;
 
-  /* check for valid table */
-  if (B == NULL) { return; }
-  if (B->A == NULL) { return; }
-  for (i = 0; i < B->stages; i++)
-  {
-    if (B->A[i] == NULL) { return; }
-  }
-  if (B->c == NULL) { return; }
-  if (B->b == NULL) { return; }
+  if (!is_valid_table(B)) { return; }
 
   fprintf(outfile, "  A = \n");
   for (i = 0; i < B->stages; i++)
@@ -337,14 +313,445 @@ sunbooleantype ARKodeButcherTable_IsStifflyAccurate(ARKodeButcherTable B)
   return SUNTRUE;
 }
 
+/* Grafts a branch onto a base tree while maintaining a lexicographic ordering
+ * of the children */
+static void butcher_product(int* base, int branch, int* tree)
+{
+  int base_children = base[0];
+  tree[0]           = base_children + 1;
+  int i;
+  for (i = 1; i <= base_children && base[i] < branch; i++)
+  {
+    tree[i] = base[i];
+  }
+
+  tree[i] = branch;
+
+  for (; i <= base_children; i++) { tree[i + 1] = base[i]; }
+}
+
+/* Returns true if the trees (lexicographically ordered) are equal and false
+ * otherwise. */
+static sunbooleantype tree_equal(int* tree1, int* tree2)
+{
+  int children1 = tree1[0];
+  int children2 = tree2[0];
+
+  return children1 == children2 &&
+         memcmp(&tree1[1], &tree2[1], children1 * sizeof(*tree1)) == 0;
+}
+
+typedef struct
+{
+  int* list;         /* A flattened array of all trees generated so far. A tree
+                      * with n children is stored as n+1 integers in this list
+                      * in the format {n, child_idx1, ..., child_idxn}. Children
+                      * are represented by indices pointing to their position in
+                      * this list. For example, the trees up to order 3 are
+                      * {
+                      * 1,
+                      * 1, 0,
+                      * 1, 1,
+                      * 2, 0, 0
+                      * } */
+  int* current;      /* A memory buffer for constructing the next tree */
+  int* order_offset; /* The indices into list at which each order starts */
+  int length;        /* The number of ints used in list */
+  int capacity;      /* The number of ints list can store */
+  int order;         /* The current order */
+  int root_order;    /* The current order of tree to use as a root */
+  int root_offset;   /* The index offset for the current root tree for the
+                      * root_order */
+  int branch_offset; /* The index offset for the current branch tree to graft on
+                      * the root */
+} tree_generator;
+
+/* A "constructor" for a tree_generator object which can produce rooted trees
+ * one at a time */
+static tree_generator tree_generator_create(void)
+{
+  return (tree_generator){.list          = NULL,
+                          .current       = NULL,
+                          .order_offset  = NULL,
+                          .length        = 0,
+                          .capacity      = 0,
+                          .order         = 0,
+                          .root_order    = 0,
+                          .root_offset   = 0,
+                          .branch_offset = 0};
+}
+
+/* Frees resources used by a tree_generator */
+static void tree_generator_free(tree_generator* gen)
+{
+  free(gen->list);
+  free(gen->current);
+  free(gen->order_offset);
+}
+
+/* Adds gen->current to the list of trees if not already present. This may
+ * require increasing the storage capacity of the generator list. */
+static int tree_generator_push(tree_generator* gen)
+{
+  /* Loop over all trees of current order */
+  for (int offset = gen->order_offset[gen->order - 1]; offset < gen->length;
+       offset += gen->list[offset] + 1)
+  {
+    /* Check if current tree has already been generated */
+    if (tree_equal(gen->current, &gen->list[offset])) { return ARK_WARNING; }
+  }
+
+  /* Check if additional capacity is needed */
+  int tree_length = gen->current[0] + 1;
+  int new_length  = gen->length + tree_length;
+  if (new_length > gen->capacity)
+  {
+    gen->capacity = 2 * new_length;
+    gen->list     = realloc(gen->list, gen->capacity * sizeof(*gen->list));
+    if (gen->list == NULL) { return ARK_MEM_FAIL; }
+  }
+
+  /* Copy the tree from the current buffer to the list */
+  memcpy(&gen->list[gen->length], gen->current, tree_length * sizeof(*gen->list));
+  gen->length = new_length;
+  return ARK_SUCCESS;
+}
+
+/* A utility function to write a tree in text, with t representing a leaf and
+ * [...] representing joining of subtrees to a shared root */
+static void tree_print(int* tree, tree_generator* gen, FILE* outfile)
+{
+  int children = tree[0];
+  if (children == 0) { fprintf(outfile, "t"); }
+  else
+  {
+    fprintf(outfile, "[");
+    for (int i = 1; i <= children; i++)
+    {
+      tree_print(&gen->list[tree[i]], gen, outfile);
+    }
+    fprintf(outfile, "]");
+  }
+}
+
+/* Generates the next rooted tree and places it into gen->current */
+static int generate_tree(tree_generator* gen)
+{
+  /* Loop over orders */
+  for (;;)
+  {
+    /* Loop over order of root tree */
+    for (; gen->root_order < gen->order; gen->root_order++)
+    {
+      int root_min = gen->order_offset[gen->root_order - 1];
+      int root_max = gen->order_offset[gen->root_order];
+
+      /* Loop over trees of current root order */
+      for (;;)
+      {
+        int root = root_min + gen->root_offset;
+        if (root == root_max) { break; }
+
+        int branch_order = gen->order - gen->root_order;
+        int branch_min   = gen->order_offset[branch_order - 1];
+        int branch_max   = gen->order_offset[branch_order];
+
+        /* Loop over branches to graft to the root */
+        for (;;)
+        {
+          int branch = branch_min + gen->branch_offset;
+          if (branch == branch_max) { break; }
+
+          butcher_product(&gen->list[root], branch, gen->current);
+          gen->branch_offset += gen->list[branch] + 1;
+
+          /* Add the tree if not already generated */
+          int retval = tree_generator_push(gen);
+          if (retval <= ARK_SUCCESS) { return retval; }
+        }
+
+        gen->root_offset += gen->list[root] + 1;
+        gen->branch_offset = 0;
+      }
+
+      gen->root_offset = 0;
+    }
+
+    gen->root_order = 1;
+    gen->order++;
+    gen->current = realloc(gen->current, gen->order * sizeof(*gen->current));
+    if (gen->current == NULL) { return ARK_MEM_FAIL; }
+    gen->order_offset = realloc(gen->order_offset,
+                                gen->order * sizeof(*gen->order_offset));
+    if (gen->order_offset == NULL) { return ARK_MEM_FAIL; }
+    gen->order_offset[gen->order - 1] = gen->length;
+
+    if (gen->order == 1)
+    {
+      gen->current[0] = 0;
+      return tree_generator_push(gen);
+    }
+  }
+}
+
+typedef struct
+{
+  sunrealtype* Phi;    /* Elementary weights for the stages */
+  sunrealtype phi;     /* Elementary weight */
+  sunrealtype phi_hat; /* Elementary weight for embedding */
+  int gamma;           /* Density */
+  int sigma;           /* Symmetry */
+  int order;           /* Number of vertices */
+} tree_props;
+
+static void vec_set(sunrealtype* vec, sunrealtype value, int stages)
+{
+  for (int i = 0; i < stages; i++) { vec[i] = value; }
+}
+
+static void vec_times(sunrealtype* vec1, sunrealtype* vec2, int stages)
+{
+  for (int i = 0; i < stages; i++) { vec1[i] *= vec2[i]; }
+}
+
+static sunrealtype dot_prod(sunrealtype* vec1, sunrealtype* vec2, int stages)
+{
+  sunrealtype total = ZERO;
+  sunrealtype err   = ZERO;
+  for (int i = 0; i < stages; i++)
+  {
+    sunCompensatedSum(total, vec1[i] * vec2[i], &total, &err);
+  }
+  return total;
+}
+
+static sunrealtype* mat_vec(sunrealtype** mat, sunrealtype* vec,
+                            sunrealtype* prod, int stages)
+{
+  for (int i = 0; i < stages; i++) { prod[i] = dot_prod(mat[i], vec, stages); }
+  return prod;
+}
+
+static sunbooleantype rowsum(ARKodeButcherTable table, sunrealtype* inf_norm,
+                             FILE* outfile)
+{
+  for (int i = 0; i < table->stages; i++)
+  {
+    sunrealtype row_sum     = ZERO;
+    sunrealtype err         = ZERO;
+    sunrealtype row_abs_sum = ZERO;
+    for (int j = 0; j < table->stages; j++)
+    {
+      sunrealtype aij = table->A[i][j];
+      sunCompensatedSum(row_sum, aij, &row_sum, &err);
+      row_abs_sum += SUNRabs(aij);
+    }
+
+    if (row_abs_sum > *inf_norm) { *inf_norm = row_abs_sum; }
+
+    /* Compensated summation has leading roundoff error of
+     * 2 * epsilon * \sum_j |A_{i,j}|, so we use that to decide if row sum is
+     * sufficiently close to c_i */
+    sunrealtype residual = SUNRabs(row_sum - table->c[i]);
+    if (residual > 2 * row_abs_sum * SUN_UNIT_ROUNDOFF)
+    {
+      if (outfile != NULL)
+      {
+        fprintf(outfile, "  row %i sum fails with residual " SUN_FORMAT_G "\n",
+                i, residual);
+      }
+      return SUNFALSE;
+    }
+  }
+  return SUNTRUE;
+}
+
+/* Recursively computes the properties of a tree with the color of each vertex
+ * given by the bits of color */
+static tree_props get_tree_props(int* tree, tree_generator* gen, int color,
+                                 ARKodeButcherTable* tables, sunrealtype* buf,
+                                 sunbooleantype root)
+{
+  tree_props props         = {.gamma = 1, .sigma = 1, .order = 1};
+  ARKodeButcherTable table = tables[color & 1];
+  int children             = tree[0];
+
+  /* A leaf vertex corresponds to c coefficients */
+  if (children == 0 && !root)
+  {
+    props.Phi = table->c;
+    return props;
+  }
+
+  int s     = table->stages;
+  props.Phi = buf;
+  vec_set(props.Phi, ONE, s);
+
+  /* Keep track of previous child color since sigma is color dependent */
+  int prev_color    = -1;
+  int num_duplicate = 1;
+  for (int i = 1; i <= children; i++)
+  {
+    int* child             = &gen->list[tree[i]];
+    int child_color        = color >> props.order;
+    sunrealtype* child_buf = &buf[props.order * s];
+    tree_props child_props = get_tree_props(child, gen, child_color, tables,
+                                            child_buf, SUNFALSE);
+    props.gamma *= child_props.gamma;
+    props.sigma *= child_props.sigma;
+    int masked_child_color = child_color & ((1 << child_props.order) - 1);
+    /* This check relies on trees being in lexicographic order so duplicate
+     * subtrees are consecutive */
+    if (prev_color == masked_child_color && tree[i] == tree[i - 1])
+    {
+      num_duplicate++;
+      props.sigma *= num_duplicate;
+    }
+    else { num_duplicate = 1; }
+    props.order += child_props.order;
+    prev_color = masked_child_color;
+    vec_times(props.Phi, child_props.Phi, s);
+  }
+
+  props.gamma *= props.order;
+
+  if (root)
+  {
+    props.phi = dot_prod(table->b, props.Phi, s);
+    if (tables[0]->d != NULL)
+    {
+      sunrealtype* d = (table->d != NULL) ? table->d : tables[0]->d;
+      props.phi_hat  = dot_prod(d, props.Phi, s);
+    }
+  }
+  else { props.Phi = mat_vec(table->A, props.Phi, &buf[s], s); }
+  return props;
+}
+
+static int compare_orders(int given, int computed, int retval)
+{
+  if (given > computed || retval == -1) { return -1; }
+  else if (given < computed || retval == 1) { return 1; }
+  else { return 0; }
+}
+
+/* Iterates of trees and computes order condition residuals to determine the
+ * order of a method and its embedding */
+static int check_order(ARKodeButcherTable* tables, sunbooleantype ark, int* q,
+                       int* p, sunrealtype inf_norm, FILE* outfile)
+{
+  tree_generator gen = tree_generator_create();
+  sunrealtype* buf   = NULL;
+  int retval         = ARK_SUCCESS;
+  sunrealtype tol    = tables[0]->stages * inf_norm * SUN_UNIT_ROUNDOFF;
+
+  while (*p < 0 || *q < 0)
+  {
+    retval = generate_tree(&gen);
+    if (retval != ARK_SUCCESS) { break; }
+
+    if (gen.order > MAX_ORDER)
+    {
+      if (outfile)
+      {
+        fprintf(outfile, "  reached maximum order of %d\n", MAX_ORDER);
+      }
+
+      if (*p < 0) { *p = MAX_ORDER; }
+      if (*q < 0) { *q = MAX_ORDER; }
+      break;
+    }
+
+    buf = realloc(buf, tables[0]->stages * gen.order * sizeof(*buf));
+    if (buf == NULL)
+    {
+      retval = ARK_MEM_FAIL;
+      break;
+    }
+
+    int max_color = ark ? (1 << gen.order) : 1;
+    for (int color = 0; color < max_color; color++)
+    {
+      tree_props props = get_tree_props(gen.current, &gen, color, tables, buf,
+                                        SUNTRUE);
+
+      if (*q < 0)
+      {
+        sunrealtype residual = SUNRabs(props.phi - ONE / props.gamma) /
+                               props.sigma;
+        if (residual > tol)
+        {
+          *q = props.order - 1;
+          if (outfile != NULL)
+          {
+            fprintf(outfile, "  method fails order %d condition for tree ",
+                    props.order);
+            tree_print(gen.current, &gen, outfile);
+            fprintf(outfile, " with residual " SUN_FORMAT_G "\n", residual);
+          }
+        }
+      }
+
+      if (*p < 0)
+      {
+        sunrealtype embedded_residual =
+          SUNRabs(props.phi_hat - ONE / props.gamma) / props.sigma;
+        if (embedded_residual > tol)
+        {
+          *p = props.order - 1;
+          if (outfile != NULL)
+          {
+            fprintf(outfile, "  embedding fails order %d condition for tree ",
+                    props.order);
+            tree_print(gen.current, &gen, outfile);
+            fprintf(outfile, " with residual " SUN_FORMAT_G "\n",
+                    embedded_residual);
+          }
+        }
+      }
+    }
+  }
+
+  tree_generator_free(&gen);
+  free(buf);
+  return retval;
+}
+
+static int check_tables(ARKodeButcherTable* tables, sunbooleantype ark, int* q,
+                        int* p, FILE* outfile)
+{
+  if (!is_valid_table(tables[0]) || (ark && !is_valid_table(tables[1])))
+  {
+    return -2;
+  }
+  if (ark && tables[0]->stages != tables[1]->stages) { return -2; }
+
+  if (outfile) { fprintf(outfile, "Order Conditions Check:\n"); }
+
+  *q                   = -1;
+  *p                   = (tables[0]->d == NULL) ? 0 : -1;
+  sunrealtype inf_norm = ZERO;
+  if (rowsum(tables[0], &inf_norm, outfile) &&
+      (!ark || rowsum(tables[1], &inf_norm, outfile)))
+  {
+    int retval = check_order(tables, ark, q, p, inf_norm, outfile);
+    if (retval != ARK_SUCCESS) { return -2; }
+  }
+
+  int retval = 0;
+  for (int i = 0; i < (ark ? 2 : 1); i++)
+  {
+    retval = compare_orders(tables[i]->q, *q, retval);
+    retval = compare_orders(tables[i]->p, *p, retval);
+  }
+
+  return retval;
+}
+
 /*---------------------------------------------------------------
   Routine to determine the analytical order of accuracy for a
   specified Butcher table.  We check the analytical [necessary]
-  order conditions, generated from the rooted trees associated
-  with the elementary differentials of the ODE right-hand side
-  (see arkode_butcher_trees_impl.h), up through order
-  ARK_BUTCHER_MAX_CHECK_ORDER.  After that, we revert to the
-  [sufficient] Butcher simplifying assumptions.
+  rooted-tree order conditions up through MAX_ORDER.
 
   Inputs:
      B: Butcher table to check
@@ -371,151 +778,13 @@ sunbooleantype ARKodeButcherTable_IsStifflyAccurate(ARKodeButcherTable B)
 int ARKodeButcherTable_CheckOrder(ARKodeButcherTable B, int* q, int* p,
                                   FILE* outfile)
 {
-  /* local variables */
-  int q_SA, p_SA, i, k, s, retval;
-  sunrealtype **A, *b, *c, *d;
-  sunrealtype* work;
-  (*q) = (*p) = 0;
-
-  /* verify non-NULL Butcher table structure and contents */
-  if (B == NULL) { return (-2); }
-  if (B->stages < 1) { return (-2); }
-  if (B->A == NULL) { return (-2); }
-  for (i = 0; i < B->stages; i++)
-  {
-    if (B->A[i] == NULL) { return (-2); }
-  }
-  if (B->c == NULL) { return (-2); }
-  if (B->b == NULL) { return (-2); }
-
-  /* set shortcuts for Butcher table components */
-  A = B->A;
-  b = B->b;
-  c = B->c;
-  d = B->d;
-  s = B->stages;
-
-  /* allocate workspace for elementary-weight evaluations */
-  work = (sunrealtype*)calloc(2 * (ARK_BUTCHER_MAX_CHECK_ORDER + 1) * s,
-                              sizeof(sunrealtype));
-  if (work == NULL) { return (-2); }
-
-  /* check method order */
-  if (outfile) { fprintf(outfile, "ARKodeButcherTable_CheckOrder:\n"); }
-
-  /*    row sum condition */
-  if (arkode_butcher_rowsum(A, c, s)) { (*q) = 0; }
-  else
-  {
-    (*q) = -1;
-    if (outfile) { fprintf(outfile, "  method fails row sum condition\n"); }
-  }
-  /*    order conditions, one per rooted tree of each order */
-  for (k = 1; k <= ARK_BUTCHER_MAX_CHECK_ORDER; k++)
-  {
-    if ((*q) != k - 1) { break; }
-    retval = arkode_butcher_check_conditions(b, A, c, s, k, work, "method",
-                                             outfile);
-    if (retval < 0)
-    {
-      free(work);
-      return (-2);
-    }
-    if (retval == 1) { (*q) = k; }
-  }
-  /*    higher order conditions (via simplifying assumptions) */
-  if ((*q) == ARK_BUTCHER_MAX_CHECK_ORDER)
-  {
-    if (outfile)
-    {
-      fprintf(outfile,
-              "  method order >= %i; reverting to simplifying assumptions\n",
-              ARK_BUTCHER_MAX_CHECK_ORDER);
-    }
-    q_SA = __ButcherSimplifyingAssumptions(A, b, c, s);
-    (*q) = SUNMAX((*q), q_SA);
-    if (outfile) { fprintf(outfile, "  method order = %i\n", (*q)); }
-  }
-
-  /* check embedding order */
-  if (d)
-  {
-    if (outfile) { fprintf(outfile, "\n"); }
-
-    /*    row sum condition */
-    if (arkode_butcher_rowsum(A, c, s)) { (*p) = 0; }
-    else
-    {
-      (*p) = -1;
-      if (outfile)
-      {
-        fprintf(outfile, "  embedding fails row sum condition\n");
-      }
-    }
-    /*    order conditions, one per rooted tree of each order */
-    for (k = 1; k <= ARK_BUTCHER_MAX_CHECK_ORDER; k++)
-    {
-      if ((*p) != k - 1) { break; }
-      retval = arkode_butcher_check_conditions(d, A, c, s, k, work, "embedding",
-                                               outfile);
-      if (retval < 0)
-      {
-        free(work);
-        return (-2);
-      }
-      if (retval == 1) { (*p) = k; }
-    }
-    /*    higher order conditions (via simplifying assumptions) */
-    if ((*p) == ARK_BUTCHER_MAX_CHECK_ORDER)
-    {
-      if (outfile)
-      {
-        fprintf(outfile,
-                "  embedding order >= %i; reverting to simplifying "
-                "assumptions\n",
-                ARK_BUTCHER_MAX_CHECK_ORDER);
-      }
-      p_SA = __ButcherSimplifyingAssumptions(A, d, c, s);
-      (*p) = SUNMAX((*p), p_SA);
-      if (outfile) { fprintf(outfile, "  embedding order = %i\n", (*p)); }
-    }
-  }
-
-  /* clean up */
-  free(work);
-
-  /* compare results against stored values and return */
-
-  /*    check failure modes first */
-  if (((*q) < B->q) && ((*q) < ARK_BUTCHER_MAX_CHECK_ORDER)) { return (-1); }
-  if (d)
-  {
-    if (((*p) < B->p) && ((*p) < ARK_BUTCHER_MAX_CHECK_ORDER)) { return (-1); }
-  }
-
-  /*    check warning modes */
-  if ((*q) > B->q) { return (1); }
-  if (d)
-  {
-    if ((*p) > B->p) { return (1); }
-  }
-  if (((*q) < B->q) && ((*q) >= ARK_BUTCHER_MAX_CHECK_ORDER)) { return (1); }
-  if (d)
-  {
-    if (((*p) < B->p) && ((*p) >= ARK_BUTCHER_MAX_CHECK_ORDER)) { return (1); }
-  }
-
-  /*    return success */
-  return (0);
+  return check_tables(&B, SUNFALSE, q, p, outfile);
 }
 
 /*---------------------------------------------------------------
   Routine to determine the analytical order of accuracy for a
   specified pair of Butcher tables in an ARK pair.  We check the
-  analytical order conditions, generated from the 2-colored rooted
-  trees associated with the elementary differentials of the
-  additively-partitioned ODE right-hand side, up through order
-  ARK_BUTCHER_MAX_ARK_CHECK_ORDER.
+  analytical rooted-tree order conditions up through MAX_ORDER.
 
   Inputs:
      B1, B2: Butcher tables to check
@@ -527,442 +796,26 @@ int ARKodeButcherTable_CheckOrder(ARKodeButcherTable B, int* q, int* p,
      p: measured order of accuracy for embedding [0 if not present]
 
   Return values:
-     0 (success): completed checks
+     0 (success): internal {q,p} values match analytical order
      1 (warning): internal {q,p} values are lower than analytical
         order, or method achieves maximum order possible with this
         routine and internal {q,p} are higher.
-    -1 (failure): NULL-valued B1, B2 (or critical contents)
+    -1 (failure): internal p and q values are higher than analytical
+         order, or NULL-valued B1, B2 (or critical contents)
 
   Note: for embedded methods, if the return flags for p and q would
-  differ, warning takes precedence over success.
+  differ, failure takes precedence over warning, which takes
+  precedence over success.
   ---------------------------------------------------------------*/
 int ARKodeButcherTable_CheckARKOrder(ARKodeButcherTable B1, ARKodeButcherTable B2,
                                      int* q, int* p, FILE* outfile)
 {
-  /* local variables */
-  int i, k, s, retval;
-  sunrealtype **A[2], *b[2], *c[2], *d[2];
-  sunrealtype* work;
-  (*q) = (*p) = 0;
-
-  /* verify non-NULL Butcher table structure and contents */
-  if (B1 == NULL) { return (-1); }
-  if (B1->stages < 1) { return (-1); }
-  if (B1->A == NULL) { return (-1); }
-  for (i = 0; i < B1->stages; i++)
-  {
-    if (B1->A[i] == NULL) { return (-1); }
-  }
-  if (B1->c == NULL) { return (-1); }
-  if (B1->b == NULL) { return (-1); }
-  if (B2 == NULL) { return (-1); }
-  if (B2->stages < 1) { return (-1); }
-  if (B2->A == NULL) { return (-1); }
-  for (i = 0; i < B2->stages; i++)
-  {
-    if (B2->A[i] == NULL) { return (-1); }
-  }
-  if (B2->c == NULL) { return (-1); }
-  if (B2->b == NULL) { return (-1); }
-  if (B1->stages != B2->stages) { return (-1); }
-
-  /* set shortcuts for Butcher table components */
-  A[0] = B1->A;
-  b[0] = B1->b;
-  c[0] = B1->c;
-  d[0] = B1->d;
-  A[1] = B2->A;
-  b[1] = B2->b;
-  c[1] = B2->c;
-  d[1] = B2->d;
-  s    = B1->stages;
-
-  /* allocate workspace for elementary-weight evaluations */
-  work = (sunrealtype*)calloc(2 * (ARK_BUTCHER_MAX_ARK_CHECK_ORDER + 1) * s,
-                              sizeof(sunrealtype));
-  if (work == NULL) { return (-1); }
-
-  /* check method order */
-  if (outfile) { fprintf(outfile, "ARKodeButcherTable_CheckARKOrder:\n"); }
-
-  /*    row sum conditions */
-  if (arkode_butcher_rowsum(A[0], c[0], s) && arkode_butcher_rowsum(A[1], c[1], s))
-  {
-    (*q) = 0;
-  }
-  else
-  {
-    (*q) = -1;
-    if (outfile) { fprintf(outfile, "  method fails row sum conditions\n"); }
-  }
-  /*    order conditions, one per 2-colored rooted tree of each order */
-  for (k = 1; k <= ARK_BUTCHER_MAX_ARK_CHECK_ORDER; k++)
-  {
-    if ((*q) != k - 1) { break; }
-    retval = arkode_butcher_check_ark_conditions(b, A, c, s, k, work, "method",
-                                                 outfile);
-    if (retval < 0)
-    {
-      free(work);
-      return (-1);
-    }
-    if (retval == 1) { (*q) = k; }
-  }
-
-  /* check embedding order */
-  if (d[0] && d[1])
-  {
-    if (outfile) { fprintf(outfile, "\n"); }
-
-    /*    row sum conditions */
-    if (arkode_butcher_rowsum(A[0], c[0], s) &&
-        arkode_butcher_rowsum(A[1], c[1], s))
-    {
-      (*p) = 0;
-    }
-    else
-    {
-      (*p) = -1;
-      if (outfile)
-      {
-        fprintf(outfile, "  embedding fails row sum conditions\n");
-      }
-    }
-    /*    order conditions, one per 2-colored rooted tree of each order */
-    for (k = 1; k <= ARK_BUTCHER_MAX_ARK_CHECK_ORDER; k++)
-    {
-      if ((*p) != k - 1) { break; }
-      retval = arkode_butcher_check_ark_conditions((sunrealtype* const*)d, A, c,
-                                                   s, k, work, "embedding",
-                                                   outfile);
-      if (retval < 0)
-      {
-        free(work);
-        return (-1);
-      }
-      if (retval == 1) { (*p) = k; }
-    }
-  }
-
-  /* clean up */
-  free(work);
-
-  /* compare results against stored values and return */
-
-  /*    check warning modes */
-  if ((*q) > B1->q) { return (1); }
-  if ((*q) > B2->q) { return (1); }
-  if (d[0] && d[1])
-  {
-    if ((*p) > B1->p) { return (1); }
-    if ((*p) > B2->p) { return (1); }
-  }
-  if (((*q) < B1->q) && ((*q) == ARK_BUTCHER_MAX_ARK_CHECK_ORDER))
-  {
-    return (1);
-  }
-  if (((*q) < B2->q) && ((*q) == ARK_BUTCHER_MAX_ARK_CHECK_ORDER))
-  {
-    return (1);
-  }
-  if (d[0] && d[1])
-  {
-    if (((*p) < B1->p) && ((*p) == ARK_BUTCHER_MAX_ARK_CHECK_ORDER))
-    {
-      return (1);
-    }
-    if (((*p) < B2->p) && ((*p) == ARK_BUTCHER_MAX_ARK_CHECK_ORDER))
-    {
-      return (1);
-    }
-  }
-
-  /*    return success */
-  return (0);
+  ARKodeButcherTable tables[] = {B1, B2};
+  int retval                  = check_tables(tables, SUNTRUE, q, p, outfile);
+  // TODO(SBR): Currently ARKodeButcherTable_CheckARKOrder handles invalid
+  // tables differently than ARKodeButcherTable_CheckOrder. In SUNDIALS 8, have
+  // this function return -2 (or better yet a named return code) when B1 or B2
+  // are invalid. The following retval check is a "hack" to maintain backwards
+  // compatibility.
+  return (retval == -2) ? -1 : retval;
 }
-
-/*---------------------------------------------------------------
-  Private utility routines for checking method order
-  ---------------------------------------------------------------*/
-
-/*---------------------------------------------------------------
-  Utility routine to compute small vector .^ int
-       z = x.^l   [Matlab notation]
-  Here all vectors are (s x 1).   Returns 0 on success,
-  nonzero on failure.
-  ---------------------------------------------------------------*/
-static int arkode_butcher_vp(sunrealtype* x, int l, int s, sunrealtype* z)
-{
-  int i;
-  if ((x == NULL) || (z == NULL) || (s < 1)) { return (1); }
-  for (i = 0; i < s; i++) { z[i] = SUNRpowerI(x[i], l); }
-  return (0);
-}
-
-/*---------------------------------------------------------------
-  Utility routine to compute small vector dot product:
-       d = dot(x,y)
-  Here x and y are (s x 1), and d is scalar.   Returns 0 on success,
-  nonzero on failure.
-  ---------------------------------------------------------------*/
-static int arkode_butcher_dot(sunrealtype* x, sunrealtype* y, int s,
-                              sunrealtype* d)
-{
-  int i;
-  if ((x == NULL) || (y == NULL) || (d == NULL) || (s < 1)) { return (1); }
-  (*d) = SUN_RCONST(0.0);
-  for (i = 0; i < s; i++) { (*d) += x[i] * y[i]; }
-  return (0);
-}
-
-/*---------------------------------------------------------------
-  Utility routine to check the row sum condition, c(i) = sum(A(i,:)).
-  Returns SUNTRUE on success, SUNFALSE on failure.
-  ---------------------------------------------------------------*/
-static sunbooleantype arkode_butcher_rowsum(sunrealtype** A, sunrealtype* c, int s)
-{
-  int i, j;
-  sunrealtype rsum;
-  for (i = 0; i < s; i++)
-  {
-    rsum = SUN_RCONST(0.0);
-    for (j = 0; j < s; j++) { rsum += A[i][j]; }
-    if (SUNRabs(rsum - c[i]) > TOL) { return (SUNFALSE); }
-  }
-  return (SUNTRUE);
-}
-
-/*---------------------------------------------------------------
-  Utility routine to check all analytical order conditions of a
-  given order for a single Butcher table (b or d, A, c).  The
-  conditions Phi(t) = 1/gamma(t) are generated from the rooted
-  trees of the requested order.  Any failed condition is reported
-  to outfile (if non-NULL) using the supplied name ("method" or
-  "embedding").  The work array must hold at least
-  2*(order+1)*s entries.
-
-  Returns 1 if all conditions hold, 0 if any condition fails, and
-  -1 on an internal error.
-  ---------------------------------------------------------------*/
-static int arkode_butcher_check_conditions(sunrealtype* b, sunrealtype** A,
-                                           sunrealtype* c, int s, int order,
-                                           sunrealtype* work, const char* name,
-                                           FILE* outfile)
-{
-  ARKodeButcherTreeIter iter;
-  long int gamma;
-  sunrealtype phi;
-  sunbooleantype alltrue, more;
-  char expr[128];
-  sunrealtype* b_[1];
-  sunrealtype** A_[1];
-  sunrealtype* c_[1];
-
-  b_[0] = b;
-  A_[0] = A;
-  c_[0] = c;
-
-  if (arkodeButcherTrees_IterInit(&iter, order)) { return (-1); }
-  alltrue = SUNTRUE;
-  more    = SUNTRUE;
-  while (more)
-  {
-    gamma = arkodeButcherTrees_Density(iter.levels, order);
-    if ((gamma < 1) || arkodeButcherTrees_Weight(iter.levels, NULL, order, b_,
-                                                 A_, c_, s, work, &phi))
-    {
-      arkodeButcherTrees_IterFree(&iter);
-      return (-1);
-    }
-    if (SUNRabs(phi - SUN_RCONST(1.0) / ((sunrealtype)gamma)) > TOL)
-    {
-      alltrue = SUNFALSE;
-      if (outfile)
-      {
-        if (arkodeButcherTrees_WeightString(iter.levels, order, expr,
-                                            sizeof(expr)))
-        {
-          expr[0] = '\0';
-        }
-        fprintf(outfile, "  %s fails order %i condition %s = 1/%ld\n", name,
-                order, expr, gamma);
-      }
-    }
-    more = arkodeButcherTrees_IterNext(&iter);
-  }
-  arkodeButcherTrees_IterFree(&iter);
-  return (alltrue ? 1 : 0);
-}
-
-/*---------------------------------------------------------------
-  Utility routine to check all analytical order conditions of a
-  given order for an ARK pair of Butcher tables.  For each rooted
-  tree of the requested order every assignment of the two tables
-  ("colors") to the tree nodes is checked: the root color selects
-  the b (or d) vector while every other node selects the A matrix
-  (or, at a leaf, the c vector) of the corresponding table.  Any
-  tree with a failed coloring is reported to outfile (if non-NULL)
-  using the supplied name ("method" or "embedding").  The work
-  array must hold at least 2*(order+1)*s entries.
-
-  Returns 1 if all conditions hold, 0 if any condition fails, and
-  -1 on an internal error.
-  ---------------------------------------------------------------*/
-static int arkode_butcher_check_ark_conditions(sunrealtype* const* b,
-                                               sunrealtype** const* A,
-                                               sunrealtype* const* c, int s,
-                                               int order, sunrealtype* work,
-                                               const char* name, FILE* outfile)
-{
-  ARKodeButcherTreeIter iter;
-  long int gamma, mask, ncolorings;
-  int i, colors[ARK_BUTCHER_MAX_ARK_CHECK_ORDER];
-  sunrealtype phi;
-  sunbooleantype alltrue, treetrue, more;
-  char expr[128];
-
-  if (order > ARK_BUTCHER_MAX_ARK_CHECK_ORDER) { return (-1); }
-  if (arkodeButcherTrees_IterInit(&iter, order)) { return (-1); }
-  alltrue = SUNTRUE;
-  more    = SUNTRUE;
-  while (more)
-  {
-    gamma = arkodeButcherTrees_Density(iter.levels, order);
-    if (gamma < 1)
-    {
-      arkodeButcherTrees_IterFree(&iter);
-      return (-1);
-    }
-    treetrue   = SUNTRUE;
-    ncolorings = 1L << order;
-    for (mask = 0; mask < ncolorings; mask++)
-    {
-      for (i = 0; i < order; i++) { colors[i] = (int)((mask >> i) & 1L); }
-      if (arkodeButcherTrees_Weight(iter.levels, colors, order, b, A, c, s,
-                                    work, &phi))
-      {
-        arkodeButcherTrees_IterFree(&iter);
-        return (-1);
-      }
-      if (SUNRabs(phi - SUN_RCONST(1.0) / ((sunrealtype)gamma)) > TOL)
-      {
-        treetrue = SUNFALSE;
-        break;
-      }
-    }
-    if (!treetrue)
-    {
-      alltrue = SUNFALSE;
-      if (outfile)
-      {
-        if (arkodeButcherTrees_WeightString(iter.levels, order, expr,
-                                            sizeof(expr)))
-        {
-          expr[0] = '\0';
-        }
-        fprintf(outfile, "  %s fails order %i conditions %s = 1/%ld\n", name,
-                order, expr, gamma);
-      }
-    }
-    more = arkodeButcherTrees_IterNext(&iter);
-  }
-  arkodeButcherTrees_IterFree(&iter);
-  return (alltrue ? 1 : 0);
-}
-
-/*---------------------------------------------------------------
-  Utility routine to check Butcher's simplifying assumptions.
-  Returns the maximum predicted order.
-  ---------------------------------------------------------------*/
-static int __ButcherSimplifyingAssumptions(sunrealtype** A, sunrealtype* b,
-                                           sunrealtype* c, int s)
-{
-  int P, Q, R, i, j, k, q;
-  sunrealtype RHS, LHS;
-  sunbooleantype alltrue;
-  sunrealtype* tmp = calloc(s, sizeof(sunrealtype));
-
-  /* B(P) */
-  P = 0;
-  for (i = 1; i < 1000; i++)
-  {
-    if (arkode_butcher_vp(c, i - 1, s, tmp))
-    {
-      free(tmp);
-      return (0);
-    }
-    if (arkode_butcher_dot(b, tmp, s, &LHS))
-    {
-      free(tmp);
-      return (0);
-    }
-    RHS = SUN_RCONST(1.0) / i;
-    if (SUNRabs(RHS - LHS) > TOL) { break; }
-    P++;
-  }
-
-  /* C(Q) */
-  Q = 0;
-  for (k = 1; k < 1000; k++)
-  {
-    alltrue = SUNTRUE;
-    for (i = 0; i < s; i++)
-    {
-      if (arkode_butcher_vp(c, k - 1, s, tmp))
-      {
-        free(tmp);
-        return (0);
-      }
-      if (arkode_butcher_dot(A[i], tmp, s, &LHS))
-      {
-        free(tmp);
-        return (0);
-      }
-      RHS = SUNRpowerI(c[i], k) / k;
-      if (SUNRabs(RHS - LHS) > TOL)
-      {
-        alltrue = SUNFALSE;
-        break;
-      }
-    }
-    if (alltrue) { Q++; }
-    else { break; }
-  }
-
-  /* D(R) */
-  R = 0;
-  for (k = 1; k < 1000; k++)
-  {
-    alltrue = SUNTRUE;
-    for (j = 0; j < s; j++)
-    {
-      LHS = SUN_RCONST(0.0);
-      for (i = 0; i < s; i++)
-      {
-        LHS += A[i][j] * b[i] * SUNRpowerI(c[i], k - 1);
-      }
-      RHS = b[j] / k * (SUN_RCONST(1.0) - SUNRpowerI(c[j], k));
-      if (SUNRabs(RHS - LHS) > TOL)
-      {
-        alltrue = SUNFALSE;
-        break;
-      }
-    }
-    if (alltrue) { R++; }
-    else { break; }
-  }
-
-  /* determine q, clean up and return */
-  q = 0;
-  for (i = 1; i <= P; i++)
-  {
-    if ((q > Q + R + 1) || (q > 2 * Q + 2)) { break; }
-    q++;
-  }
-  free(tmp);
-  return (q);
-}
-
-/*---------------------------------------------------------------
-  EOF
-  ---------------------------------------------------------------*/
