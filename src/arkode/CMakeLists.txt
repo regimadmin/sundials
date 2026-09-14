@@ -29,7 +29,6 @@ set(arkode_SOURCES
     arkode_bbdpre.c
     arkode_butcher_dirk.c
     arkode_butcher_erk.c
-    arkode_butcher_trees.c
     arkode_butcher.c
     arkode_cli.c
     arkode_erkstep_io.c
@@ -42,6 +41,7 @@ set(arkode_SOURCES
     arkode_lsrkstep.c
     arkode_mri_tables.c
     arkode_mristep_controller.c
+    arkode_mristep_extsts.c
     arkode_mristep_io.c
     arkode_mristep_nls.c
     arkode_mristep.c

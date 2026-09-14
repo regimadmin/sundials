@@ -83,14 +83,14 @@ individual packages. The name of the distribution archive is of the form
 ``cvodes``, ``arkode``, ``ida``, ``idas``, or ``kinsol``, and ``a.b.c``
 represents the version number of the SUNDIALS suite or of the individual
 package. After downloading the relevant archives, uncompress and expand the
-sources. For example, if you downloaded ``sundials-7.8.0.tar.gz``, running the
+sources. For example, if you downloaded ``sundials-7.9.0.tar.gz``, running the
 command
 
 .. code-block:: bash
 
-   tar -zxf sundials-7.8.0.tar.gz
+   tar -zxf sundials-7.9.0.tar.gz
 
-will extract the source files under the ``sundials-7.8.0`` directory.
+will extract the source files under the ``sundials-7.9.0`` directory.
 
 In the installation steps below we will refer to the following directories:
 
@@ -501,6 +501,17 @@ Fortran Compiler
    ``MinSizeRel``
 
    Default: ``-Os``
+
+Compiler Diagnostics
+""""""""""""""""""""
+
+.. cmakeoption:: SUNDIALS_ENABLE_DEPRECATED_WARNINGS
+
+   Enable compiler warnings for use of deprecated SUNDIALS APIs.
+
+   Default: ``ON``
+
+   .. versionadded:: 7.9.0
 
 .. _Installation.Options.InstallLocation:
 
