@@ -14,6 +14,15 @@ details on its usage.
 Added Butcher tables for the classical RK4 (`ARKODE_KUTTA_RK4a_4_4`) and
 3/8-rule (`ARKODE_KUTTA_RK4b_4_4`) methods.
 
+Added an ARKODE rooted-tree module expressing the elementary differentials of
+an ODE, whose counts per order follow [OEIS sequence
+A000081](https://oeis.org/A000081).  The order condition diagnostics printed by
+`ARKodeButcherTable_CheckOrder` and `ARKodeButcherTable_CheckARKOrder` now
+identify each failed condition by its elementary differential, e.g.,
+`f''(f,f)`, and the corresponding condition on the table coefficients, e.g.,
+`b'*c.^2 = 1/3`.  See the documentation section on rooted trees and order
+conditions for details.
+
 Added CUDA support to the sundials4py Python interface. CUDA N_Vectors can be
 used with CUDA device arrays from CuPy, PyTorch and JAX when built with
 `SUNDIALS_ENABLE_CUDA` set to `ON`.
