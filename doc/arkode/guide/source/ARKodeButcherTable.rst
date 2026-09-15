@@ -351,9 +351,21 @@ ARKodeButcherTable functions
         ``NULL``.
 
    **Notes:**
+      The order conditions tested by this routine are generated from the
+      rooted trees of each order, whose counts per order follow OEIS sequence
+      `A000081 <https://oeis.org/A000081>`_; see section
+      :numref:`ARKODE.Mathematics.OrderConditions` for details.  When
+      *outfile* is provided, each failed condition is reported together with
+      its corresponding elementary differential.
+
       For embedded methods, if the return flags for *q* and *p* would
       differ, failure takes precedence over warning, which takes precedence over
       success.
+
+   .. versionchanged:: 7.9.0 (ARKODE 6.9.0)
+
+      Failed order conditions are now reported together with their
+      corresponding elementary differentials.
 
 
 .. c:function:: int ARKodeButcherTable_CheckARKOrder(ARKodeButcherTable B1, ARKodeButcherTable B2, int *q, int *p, FILE *outfile)
@@ -383,6 +395,17 @@ ARKodeButcherTable functions
         critical table contents are ``NULL``.
 
    **Notes:**
+      The coupled order conditions tested by this routine are generated from
+      the two-colored rooted trees of each order; see section
+      :numref:`ARKODE.Mathematics.OrderConditions` for details.  When
+      *outfile* is provided, each failed condition is reported together with
+      its corresponding elementary differential.
+
       For embedded methods, if the return flags for *q* and *p* would
       differ, failure takes precedence over warning, which takes precedence over
       success.
+
+   .. versionchanged:: 7.9.0 (ARKODE 6.9.0)
+
+      Failed order conditions are now reported together with their
+      corresponding elementary differentials.
