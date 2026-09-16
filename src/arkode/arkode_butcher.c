@@ -24,6 +24,7 @@
 #include <string.h>
 #include <sundials/sundials_math.h>
 
+#include "arkode_butcher_trees_impl.h"
 #include "arkode_impl.h"
 #include "sundials_utils.h"
 
@@ -434,6 +435,47 @@ static void tree_print(int* tree, tree_generator* gen, FILE* outfile)
   }
 }
 
+/* Writes the level sequence (root at level 1) of a generator tree into
+ * levels, returning the number of nodes written */
+static int tree_levels(int* tree, tree_generator* gen, int level, int* levels)
+{
+  int count       = 0;
+  levels[count++] = level;
+  for (int i = 1; i <= tree[0]; i++)
+  {
+    count += tree_levels(&gen->list[tree[i]], gen, level + 1, &levels[count]);
+  }
+  return count;
+}
+
+/* Writes the elementary differential corresponding to the tree in
+ * gen->current and, for non-ARK checks, the associated order condition on
+ * the method (embedded = SUNFALSE) or embedding (embedded = SUNTRUE)
+ * coefficients.  The tree counts per order match OEIS A000081. */
+static void print_tree_condition(tree_generator* gen, sunbooleantype ark,
+                                 sunbooleantype embedded, FILE* outfile)
+{
+  int* levels = (int*)malloc(gen->order * sizeof(*levels));
+  if (levels == NULL) { return; }
+  tree_levels(gen->current, gen, 1, levels);
+  char* diff   = arkButcherTreeDiffString(levels, gen->order);
+  char* weight = ark ? NULL : arkButcherTreeWeightString(levels, gen->order);
+  if (diff != NULL)
+  {
+    fprintf(outfile, "    elementary differential: %s", diff);
+    if (weight != NULL)
+    {
+      if (embedded && weight[0] == 'b') { weight[0] = 'd'; }
+      fprintf(outfile, ", condition: %s = 1/%ld", weight,
+              arkButcherTreeGamma(levels, gen->order));
+    }
+    fprintf(outfile, "\n");
+  }
+  free(weight);
+  free(diff);
+  free(levels);
+}
+
 /* Generates the next rooted tree and places it into gen->current */
 static int generate_tree(tree_generator* gen)
 {
@@ -688,6 +730,7 @@ static int check_order(ARKodeButcherTable* tables, sunbooleantype ark, int* q,
                     props.order);
             tree_print(gen.current, &gen, outfile);
             fprintf(outfile, " with residual " SUN_FORMAT_G "\n", residual);
+            print_tree_condition(&gen, ark, SUNFALSE, outfile);
           }
         }
       }
@@ -706,6 +749,7 @@ static int check_order(ARKodeButcherTable* tables, sunbooleantype ark, int* q,
             tree_print(gen.current, &gen, outfile);
             fprintf(outfile, " with residual " SUN_FORMAT_G "\n",
                     embedded_residual);
+            print_tree_condition(&gen, ark, SUNTRUE, outfile);
           }
         }
       }

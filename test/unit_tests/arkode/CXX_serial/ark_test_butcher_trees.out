@@ -1,0 +1,52 @@
+
+Rooted tree enumeration and A000081 counts:
+  order 1: 1 tree(s)
+  order 2: 1 tree(s)
+  order 3: 2 tree(s)
+  order 4: 4 tree(s)
+  order 5: 9 tree(s)
+  order 6: 20 tree(s)
+  order 7: 48 tree(s)
+  order 8: 115 tree(s)
+  order 9: 286 tree(s)
+  order 10: 719 tree(s)
+  enumeration matches A000081 and the recurrence counter
+
+Labeling identity, sum of n!/(sigma*gamma) = (n-1)!:
+  order 1: sum = 1
+  order 2: sum = 1
+  order 3: sum = 2
+  order 4: sum = 6
+  order 5: sum = 24
+  order 6: sum = 120
+  order 7: sum = 720
+  order 8: sum = 5040
+  order 9: sum = 40320
+  order 10: sum = 362880
+  identity satisfied for all orders
+
+Elementary differentials and weights through order 4:
+  order 1: F(t) = f, Phi(t) = b'*e = 1/1, sigma = 1
+  order 2: F(t) = f'f, Phi(t) = b'*c = 1/2, sigma = 1
+  order 3: F(t) = f'f'f, Phi(t) = b'*(A*c) = 1/6, sigma = 1
+  order 3: F(t) = f''(f,f), Phi(t) = b'*c.^2 = 1/3, sigma = 2
+  order 4: F(t) = f'f'f'f, Phi(t) = b'*(A*(A*c)) = 1/24, sigma = 1
+  order 4: F(t) = f'f''(f,f), Phi(t) = b'*(A*c.^2) = 1/12, sigma = 2
+  order 4: F(t) = f''(f'f,f), Phi(t) = b'*((A*c).*c) = 1/8, sigma = 1
+  order 4: F(t) = f'''(f,f,f), Phi(t) = b'*c.^3 = 1/4, sigma = 6
+  rendered expressions match reference forms
+
+Elementary weight checks:
+  RK4 satisfies all conditions through order 4: PASS
+  RK4 fails at least one order 5 condition: PASS
+  Gauss-3 satisfies all conditions through order 6: PASS
+  Gauss-3 fails at least one order 7 condition: PASS
+  Heun-Euler satisfies all conditions through order 2: PASS
+  Heun-Euler fails at least one order 3 condition: PASS
+  Heun-Euler embedding satisfies all conditions through order 1: PASS
+  Heun-Euler embedding fails at least one order 2 condition: PASS
+
+Invalid input checks:
+  invalid inputs rejected
+
+All rooted-tree tests passed

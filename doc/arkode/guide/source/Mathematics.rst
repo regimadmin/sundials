@@ -436,6 +436,54 @@ classes of methods, ARKODE provides tables with orders of accuracy
 :numref:`Butcher.implicit`. Again, user-defined DIRK tables are supported.
 
 
+.. _ARKODE.Mathematics.OrderConditions:
+
+Rooted trees and order conditions
+---------------------------------
+
+The orders of accuracy :math:`q` and :math:`p` of the methods
+:eq:`ARKODE_ARK` are characterized by their *order conditions*.  For an
+autonomous ODE :math:`\dot{y} = f(y)`, the Taylor expansion of the solution
+is organized in terms of the *elementary differentials* of :math:`f`
+(:math:`f`, :math:`f'f`, :math:`f''(f,f)`, :math:`f'f'f`, ...), which are in
+one-to-one correspondence with the unlabeled rooted trees :math:`t` whose
+number of nodes :math:`r(t)` equals the order of the differential
+:cite:p:`Butcher:08,HWN:87`.  The number of rooted trees (and hence of
+elementary differentials) per order :math:`n = 1, 2, 3, \ldots` is given by
+the sequence
+
+.. math::
+   1, \; 1, \; 2, \; 4, \; 9, \; 20, \; 48, \; 115, \; 286, \; 719, \; \ldots
+
+(`OEIS A000081 <https://oeis.org/A000081>`_).  A Runge--Kutta method with
+coefficients :math:`(A, b, c)` has order of accuracy :math:`q` if and only if
+
+.. math::
+   \Phi(t) = \frac{1}{\gamma(t)} \quad \text{for every tree } t \text{ with }
+   r(t) \le q,
+
+where the *elementary weight* :math:`\Phi(t)` is evaluated from the Butcher
+table by mapping each leaf of :math:`t` to :math:`c`, each internal node to
+:math:`A` times the componentwise product of its children, and the root to a
+dot product with :math:`b`, while the *density* :math:`\gamma(t)` is the
+product over all nodes of :math:`t` of the number of nodes in the subtree
+rooted there.  For example, the four trees with :math:`r(t) \le 3` yield the
+conditions :math:`b^T e = 1`, :math:`b^T c = \frac12`,
+:math:`b^T A c = \frac16` and :math:`b^T c^2 = \frac13` (with componentwise
+powers of :math:`c`).  The same conditions applied to the embedding
+coefficients :math:`\tilde{b}` determine the embedding order :math:`p`, and
+additive methods :eq:`ARKODE_ARK` must satisfy analogous *coupling*
+conditions obtained from trees whose nodes are colored by the two operators
+:math:`f^E` and :math:`f^I` :cite:p:`KenCarp:03`.
+
+ARKODE generates these order conditions programmatically from the rooted
+trees of each order.  The routines :c:func:`ARKodeButcherTable_CheckOrder`
+and :c:func:`ARKodeButcherTable_CheckARKOrder` verify the conditions for a
+Butcher table (or a pair of tables, using the two-colored trees) up to order
+10, and report every failed condition together with its elementary
+differential.
+
+
 .. _ARKODE.Mathematics.ERK:
 
 ERKStep -- Explicit Runge--Kutta methods

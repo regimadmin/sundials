@@ -50,6 +50,7 @@ set(unit_tests
     "ark_test_dahlquist_mri.cpp\;0\;develop"
     "ark_test_dahlquist_mri.cpp\;1\;develop"
     "ark_test_butcher.cpp\;\;develop"
+    "ark_test_butcher_trees.cpp\;\;develop"
     "ark_test_getjac.cpp\;\;develop"
     "ark_test_getjac_mri.cpp\;\;develop"
     "ark_test_kpr_mriadapt.cpp\;--hs 0.002 --rtol 0.000004 --scontrol 0\;exclude-single"
